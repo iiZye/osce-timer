@@ -432,11 +432,12 @@ input[type="time"] { width: 9.5ch; }
   }
   /* ---------- live control: stable session id, absolute state over a public relay ---------- */
   var RELAY = "wss://broker.emqx.io:8084/mqtt", TOPIC = "osce-timer/v1/";
-  var mq = null, live = false, sid = null, KEYS = ["r", "s", "w", "f", "n", "from", "p", "x"];
+  var mq = null, live = false, sid = null, skew = 0, KEYS = ["r", "s", "w", "f", "n", "from", "p", "x"];
   function liveNote() {
     var el = $("liveMsg"); if (!el) return;
     el.textContent = live
-      ? (sid ? "Live on code " + sid + " \u00b7 Pause and Skip reach every device. The code never changes."
+      ? (sid ? "Live on code " + sid + " \u00b7 Pause and Skip reach every device."
+               + (!isHost && Math.abs(skew) > 1500 ? " This device's clock is " + (skew > 0 ? "+" : "") + Math.round(skew / 1000) + "s out \u2014 corrected from the host." : "")
              : "Live \u00b7 create or join a session.")
       : "Not live \u2014 bells still run from each device clock. Pause and Skip change this device only.";
     el.style.color = live ? "var(--station)" : "var(--muted)";
@@ -446,7 +447,7 @@ input[type="time"] { width: 9.5ch; }
   function broadcast() {
     if (!mq || !live || !isHost || !cfg || !sid) return;
     var o = {}; KEYS.forEach(function (k) { o[k] = cfg[k]; });
-    o.start = cfg.start; o.pausedAt = paused || 0;
+    o.start = cfg.start; o.pausedAt = paused || 0; o.sentAt = Date.now();
     try { mq.publish(TOPIC + sid.replace(/\s+/g, "_"), JSON.stringify(o), { retain: true, qos: 0 }); } catch (e) {}
   }
   function applyRemote(raw) {
@@ -455,9 +456,12 @@ input[type="time"] { width: 9.5ch; }
     if (!m || typeof m.start !== "number") return;
     var c = {}; KEYS.forEach(function (k) { c[k] = m[k]; });
     if (!ok(c)) return;
-    c.start = m.start;
-    if (!cfg || cfg.start !== c.start || codeOf(cfg) !== codeOf(c)) { use(c); }
-    var np = m.pausedAt || null;
+    skew = m.sentAt ? (Date.now() - m.sentAt) : 0;
+    c.start = m.start + skew;
+    var moved = !cfg || Math.abs(cfg.start - c.start) > 400;
+    if (moved || codeOf(cfg) !== codeOf(c)) { use(c); }
+    liveNote();
+    var np = m.pausedAt ? (m.pausedAt + skew) : null;
     if ((paused || null) !== np) {
       paused = np;
       if (np) { audio.pause(); } else { lastEl = null; startTrack(); }
@@ -481,7 +485,8 @@ input[type="time"] { width: 9.5ch; }
   function use(c) {
     cfg = c ? build(c) : null; lastEl = null; paused = null; $("ctlNote").hidden = true;
     var showCtl = !!c && isHost; $("ctl").hidden = !showCtl; $("ctl").style.display = showCtl ? "flex" : "none"; $("pauseBtn").textContent = "Pause";
-    $("codeChip").textContent = c ? "Code " + codeOf(c) : "Not joined"; store(c ? codeOf(c) : null); drawMarks(); render(); startTrack(); subscribe(); broadcast();
+    $("codeChip").textContent = c ? "Code " + (sid || codeOf(c)) : "Not joined"; store(c ? codeOf(c) : null);
+    try { if (sid) localStorage.setItem("osceTimerSid", sid); else localStorage.removeItem("osceTimerSid"); } catch (e) {} drawMarks(); render(); startTrack(); subscribe(); broadcast();
   }
   $("join").onclick = function () {
     var c = parseCode($("joinCode").value);
@@ -536,7 +541,7 @@ input[type="time"] { width: 9.5ch; }
       try { localStorage.removeItem("osceTimerHost"); } catch (e) {}
       use(cU); $("joinCode").value = codeOf(cU);
       $("joinMsg").innerHTML = "<b>Joined from the link \u2014 " + describe(cU) + "</b><br>Now tap the red Muted button so it turns green."; } }
-  if (!urlCode)   try { var saved = localStorage.getItem("osceTimerCode"); if (saved) { var c0 = parseCode(saved); if (c0) { build(c0); if (Date.now() - c0.start < c0.T + 3600000) { try { isHost = localStorage.getItem("osceTimerHost") === saved; } catch (e) {} setSid(codeOf(c0)); use(c0); $("joinCode").value = saved; } } } } catch (e) {}
+  if (!urlCode)   try { var saved = localStorage.getItem("osceTimerCode"); if (saved) { var c0 = parseCode(saved); if (c0) { build(c0); if (Date.now() - c0.start < c0.T + 3600000) { try { isHost = localStorage.getItem("osceTimerHost") === saved; } catch (e) {} var sv = null; try { sv = localStorage.getItem("osceTimerSid"); } catch (e) {} setSid(sv || codeOf(c0)); use(c0); $("joinCode").value = saved; } } } } catch (e) {}
   drawMarks(); render();
 })();
 
